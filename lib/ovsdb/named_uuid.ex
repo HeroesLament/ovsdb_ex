@@ -97,11 +97,9 @@ defmodule OVSDB.NamedUUID do
   """
   @spec decode(term()) :: {:ok, t()} | {:error, :invalid_named_uuid | :malformed}
   def decode(["named-uuid", name]) when is_binary(name) do
-    try do
-      {:ok, new(name)}
-    rescue
-      ArgumentError -> {:error, :invalid_named_uuid}
-    end
+    {:ok, new(name)}
+  rescue
+    ArgumentError -> {:error, :invalid_named_uuid}
   end
 
   def decode(_), do: {:error, :malformed}

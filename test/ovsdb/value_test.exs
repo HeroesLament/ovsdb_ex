@@ -2,7 +2,7 @@ defmodule OVSDB.ValueTest do
   use ExUnit.Case, async: true
   doctest OVSDB.Value
 
-  alias OVSDB.{Value, UUID, NamedUUID, Set, Map}
+  alias OVSDB.{Map, NamedUUID, Set, UUID, Value}
 
   describe "encode/1 — atomic types pass through" do
     test "integers" do

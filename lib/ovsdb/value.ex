@@ -65,7 +65,50 @@ defmodule OVSDB.Value do
   `OVSDB.Schema.validate_row/3`.
   """
 
-  alias OVSDB.{UUID, NamedUUID, Set, Map}
+  alias OVSDB.{Map, NamedUUID, Set, UUID}
+
+  @typedoc """
+  An atomic OVSDB value — one of the five scalar types per RFC 7047
+  §3.2, represented in Elixir-native form except for UUIDs (which
+  must be wrapped because a raw UUID string is indistinguishable
+  from any other string).
+  """
+  @type atom_value ::
+          integer()
+          | float()
+          | boolean()
+          | String.t()
+          | UUID.t()
+          | NamedUUID.t()
+
+  @typedoc """
+  Any OVSDB value — atomic, set, or map. This is the full domain of
+  `encode/1` and the result type of `decode_value/1`.
+  """
+  @type value :: atom_value() | Set.t() | Map.t()
+
+  @typedoc """
+  The RFC 7047 wire form of an OVSDB value. Integers, floats,
+  booleans, and strings appear bare; UUIDs, named UUIDs, sets, and
+  maps appear as tagged arrays. The `nonempty_list()` leaf covers
+  all four tagged shapes without enumerating them at the type level.
+  """
+  @type wire ::
+          integer()
+          | float()
+          | boolean()
+          | String.t()
+          | nonempty_list()
+
+  @typedoc """
+  Errors that decode functions may return. The set is closed — new
+  error atoms will be added via a minor or major version bump.
+  """
+  @type decode_error ::
+          :invalid_uuid
+          | :invalid_named_uuid
+          | :malformed
+          | {:not_an_atom, term()}
 
   @doc """
   Encodes an Elixir term to its OVSDB wire form.
@@ -95,7 +138,7 @@ defmodule OVSDB.Value do
       iex> OVSDB.Value.encode(set_with_uuids)
       ["uuid", "550e8400-e29b-41d4-a716-446655440000"]
   """
-  @spec encode(term()) :: term()
+  @spec encode(value()) :: wire()
   def encode(%UUID{} = u), do: UUID.encode(u)
   def encode(%NamedUUID{} = n), do: NamedUUID.encode(n)
 
@@ -145,7 +188,7 @@ defmodule OVSDB.Value do
       iex> OVSDB.Value.decode_atom(["named-uuid", "new_br"])
       {:ok, %OVSDB.NamedUUID{name: "new_br"}}
   """
-  @spec decode_atom(term()) :: {:ok, term()} | {:error, term()}
+  @spec decode_atom(wire()) :: {:ok, atom_value()} | {:error, decode_error()}
   def decode_atom(["uuid", _] = wire), do: UUID.decode(wire)
   def decode_atom(["named-uuid", _] = wire), do: NamedUUID.decode(wire)
   def decode_atom(int) when is_integer(int), do: {:ok, int}
@@ -176,7 +219,7 @@ defmodule OVSDB.Value do
       iex> OVSDB.Value.decode_value(["set", [["uuid", "550e8400-e29b-41d4-a716-446655440000"]]])
       {:ok, %OVSDB.Set{elements: [%OVSDB.UUID{value: "550e8400-e29b-41d4-a716-446655440000"}]}}
   """
-  @spec decode_value(term()) :: {:ok, term()} | {:error, term()}
+  @spec decode_value(wire()) :: {:ok, value()} | {:error, decode_error()}
   def decode_value(["uuid", _] = wire), do: UUID.decode(wire)
   def decode_value(["named-uuid", _] = wire), do: NamedUUID.decode(wire)
 

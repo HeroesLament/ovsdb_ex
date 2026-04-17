@@ -45,6 +45,12 @@ defmodule OVSDB.Map do
 
   @type t :: %__MODULE__{entries: [{term(), term()}]}
 
+  @typedoc """
+  A map that is statically known to be empty. Narrower than `t()` so
+  that Dialyzer can verify `empty/0`'s return type exactly.
+  """
+  @type empty :: %__MODULE__{entries: []}
+
   @doc """
   Creates a map from a list of `{key, value}` tuples or from a native
   Elixir map.
@@ -60,11 +66,8 @@ defmodule OVSDB.Map do
   @spec new([{term(), term()}] | %{optional(term()) => term()}) :: t()
   def new(entries) when is_list(entries) do
     Enum.each(entries, fn
-      {_k, _v} ->
-        :ok
-
-      other ->
-        raise ArgumentError, "map entries must be {key, value} tuples, got: #{inspect(other)}"
+      {_k, _v} -> :ok
+      other -> raise ArgumentError, "map entries must be {key, value} tuples, got: #{inspect(other)}"
     end)
 
     %__MODULE__{entries: entries}
@@ -77,7 +80,7 @@ defmodule OVSDB.Map do
   @doc """
   Returns the empty map.
   """
-  @spec empty() :: t()
+  @spec empty() :: empty()
   def empty, do: %__MODULE__{entries: []}
 
   @doc """
@@ -145,7 +148,13 @@ defmodule OVSDB.Map do
       iex> OVSDB.Map.encode(OVSDB.Map.empty())
       ["map", []]
   """
-  @spec encode(t()) :: [term(), ...]
+  @typedoc """
+  The wire form of a map — always a tagged `["map", [[k, v], ...]]`
+  array, regardless of cardinality.
+  """
+  @type wire :: nonempty_list()
+
+  @spec encode(t()) :: wire()
   def encode(%__MODULE__{entries: entries}) do
     ["map", Enum.map(entries, fn {k, v} -> [k, v] end)]
   end
@@ -184,17 +193,15 @@ defmodule OVSDB.Map do
   @spec decode_with(term(), (term() -> term()), (term() -> term())) ::
           {:ok, t()} | {:error, :malformed}
   def decode_with(["map", entries], key_decoder, value_decoder) when is_list(entries) do
-    try do
-      decoded =
-        Enum.map(entries, fn
-          [k, v] -> {key_decoder.(k), value_decoder.(v)}
-          _ -> throw(:malformed_entry)
-        end)
+    decoded =
+      Enum.map(entries, fn
+        [k, v] -> {key_decoder.(k), value_decoder.(v)}
+        _ -> throw(:malformed_entry)
+      end)
 
-      {:ok, %__MODULE__{entries: decoded}}
-    catch
-      :malformed_entry -> {:error, :malformed}
-    end
+    {:ok, %__MODULE__{entries: decoded}}
+  catch
+    :malformed_entry -> {:error, :malformed}
   end
 
   def decode_with(_, _, _), do: {:error, :malformed}

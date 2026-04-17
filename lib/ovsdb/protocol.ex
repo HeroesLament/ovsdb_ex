@@ -68,6 +68,28 @@ defmodule OVSDB.Protocol do
           | {:response, %{id: id(), result: term() | nil, error: term() | nil}}
           | {:notification, %{method: String.t(), params: list()}}
 
+  @typedoc """
+  Errors that classification and parsing may return. The set is
+  closed — new error atoms will be added via a minor or major
+  version bump.
+  """
+  @type classify_error ::
+          :unclassifiable
+          | :response_id_null
+          | :response_result_and_error_both_null
+          | :response_result_and_error_both_set
+          | {:not_a_map, term()}
+          | {:missing_fields, [String.t()]}
+          | {:malformed_method_message, map()}
+
+  @typedoc """
+  Errors that `parse/1` may return, beyond those `classify_error`
+  covers when composed via `parse_and_classify/1`.
+  """
+  @type parse_error ::
+          :not_an_object
+          | {:parse_error, Jason.DecodeError.t()}
+
   # RFC 7047 §4.1 — the only methods OVSDB defines.
   @client_methods ~w(list_dbs get_schema transact cancel monitor monitor_cancel
                      lock steal unlock echo)
@@ -207,7 +229,7 @@ defmodule OVSDB.Protocol do
       iex> OVSDB.Protocol.classify(%{"method" => "x"})
       {:error, {:missing_fields, ["params", "id"]}}
   """
-  @spec classify(map()) :: {:ok, classified()} | {:error, term()}
+  @spec classify(term()) :: {:ok, classified()} | {:error, classify_error()}
   def classify(message) when is_map(message) do
     case {
       Elixir.Map.has_key?(message, "method"),
@@ -221,10 +243,7 @@ defmodule OVSDB.Protocol do
 
       {true, _, _, _, _} ->
         missing =
-          [
-            {"params", Elixir.Map.has_key?(message, "params")},
-            {"id", Elixir.Map.has_key?(message, "id")}
-          ]
+          [{"params", Elixir.Map.has_key?(message, "params")}, {"id", Elixir.Map.has_key?(message, "id")}]
           |> Enum.reject(fn {_, present} -> present end)
           |> Enum.map(fn {name, _} -> name end)
 
@@ -309,7 +328,7 @@ defmodule OVSDB.Protocol do
       iex> OVSDB.Protocol.parse("[1,2,3]")
       {:error, :not_an_object}
   """
-  @spec parse(binary()) :: {:ok, message()} | {:error, term()}
+  @spec parse(binary()) :: {:ok, message()} | {:error, parse_error()}
   def parse(binary) when is_binary(binary) do
     case Jason.decode(binary) do
       {:ok, map} when is_map(map) -> {:ok, map}
@@ -324,7 +343,8 @@ defmodule OVSDB.Protocol do
   Returns the same `{:ok, classified()}` / `{:error, term()}` shape
   as `classify/1`, with parse errors subsumed.
   """
-  @spec parse_and_classify(binary()) :: {:ok, classified()} | {:error, term()}
+  @spec parse_and_classify(binary()) ::
+          {:ok, classified()} | {:error, parse_error() | classify_error()}
   def parse_and_classify(binary) when is_binary(binary) do
     with {:ok, map} <- parse(binary) do
       classify(map)

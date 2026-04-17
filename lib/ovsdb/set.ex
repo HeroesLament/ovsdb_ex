@@ -50,6 +50,12 @@ defmodule OVSDB.Set do
 
   @type t :: %__MODULE__{elements: [term()]}
 
+  @typedoc """
+  A set that is statically known to be empty. Narrower than `t()` so
+  that Dialyzer can verify `empty/0`'s return type exactly.
+  """
+  @type empty :: %__MODULE__{elements: []}
+
   @doc """
   Creates a set from a list of elements.
 
@@ -75,7 +81,7 @@ defmodule OVSDB.Set do
       iex> OVSDB.Set.empty()
       %OVSDB.Set{elements: []}
   """
-  @spec empty() :: t()
+  @spec empty() :: empty()
   def empty, do: %__MODULE__{elements: []}
 
   @doc """
@@ -117,7 +123,13 @@ defmodule OVSDB.Set do
       iex> OVSDB.Set.encode(OVSDB.Set.empty())
       ["set", []]
   """
-  @spec encode(t()) :: term()
+  @typedoc """
+  The wire form of a set — either a tagged `["set", [...]]` array
+  (for 0 or 2+ elements) or the bare element (for 1-element sets).
+  """
+  @type wire :: integer() | float() | boolean() | String.t() | nonempty_list()
+
+  @spec encode(t()) :: wire()
   def encode(%__MODULE__{elements: [single]}), do: single
   def encode(%__MODULE__{elements: elements}), do: ["set", elements]
 
@@ -160,7 +172,7 @@ defmodule OVSDB.Set do
       ...> )
       {:ok, %OVSDB.Set{elements: [%OVSDB.UUID{value: "550e8400-e29b-41d4-a716-446655440000"}]}}
   """
-  @spec decode_for_column(term(), (term() -> term())) :: {:ok, t()} | {:error, term()}
+  @spec decode_for_column(term(), (term() -> term())) :: {:ok, t()}
   def decode_for_column(["set", elements], element_decoder) when is_list(elements) do
     {:ok, new(Enum.map(elements, element_decoder))}
   end
