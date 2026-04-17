@@ -113,6 +113,7 @@ defmodule OVSDB.ProtocolTest do
 
     test "classifies a notification (method with null id)" do
       msg = %{"method" => "update", "params" => ["m", %{}], "id" => nil}
+
       assert {:ok, {:notification, %{method: "update", params: ["m", %{}]}}} =
                Protocol.classify(msg)
     end
@@ -287,6 +288,7 @@ defmodule OVSDB.ProtocolTest do
     test "responses roundtrip" do
       msg = Protocol.response(1, ["a", "b"])
       wire = msg |> Protocol.serialize() |> IO.iodata_to_binary()
+
       assert {:ok, {:response, %{id: 1, result: ["a", "b"], error: nil}}} =
                Protocol.parse_and_classify(wire)
     end

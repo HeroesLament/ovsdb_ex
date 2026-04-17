@@ -106,7 +106,11 @@ defmodule OVSDB.SetTest do
 
     test "applies element_decoder to each element" do
       uuid_wire = ["uuid", "550e8400-e29b-41d4-a716-446655440000"]
-      decoder = fn wire -> {:ok, u} = UUID.decode(wire); u end
+
+      decoder = fn wire ->
+        {:ok, u} = UUID.decode(wire)
+        u
+      end
 
       {:ok, set} = Set.decode_for_column(["set", [uuid_wire, uuid_wire]], decoder)
       assert length(set.elements) == 2
@@ -115,7 +119,11 @@ defmodule OVSDB.SetTest do
 
     test "applies element_decoder to bare single value" do
       uuid_wire = ["uuid", "550e8400-e29b-41d4-a716-446655440000"]
-      decoder = fn wire -> {:ok, u} = UUID.decode(wire); u end
+
+      decoder = fn wire ->
+        {:ok, u} = UUID.decode(wire)
+        u
+      end
 
       {:ok, %Set{elements: [uuid]}} = Set.decode_for_column(uuid_wire, decoder)
       assert %UUID{} = uuid

@@ -134,7 +134,11 @@ defmodule OVSDB.MapTest do
   describe "decode_with/3" do
     test "applies key_decoder and value_decoder" do
       uuid_wire = ["uuid", "550e8400-e29b-41d4-a716-446655440000"]
-      val_decoder = fn w -> {:ok, u} = UUID.decode(w); u end
+
+      val_decoder = fn w ->
+        {:ok, u} = UUID.decode(w)
+        u
+      end
 
       {:ok, m} = Map.decode_with(["map", [["k", uuid_wire]]], &Function.identity/1, val_decoder)
       assert [{"k", %UUID{}}] = m.entries

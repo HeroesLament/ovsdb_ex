@@ -60,8 +60,11 @@ defmodule OVSDB.Map do
   @spec new([{term(), term()}] | %{optional(term()) => term()}) :: t()
   def new(entries) when is_list(entries) do
     Enum.each(entries, fn
-      {_k, _v} -> :ok
-      other -> raise ArgumentError, "map entries must be {key, value} tuples, got: #{inspect(other)}"
+      {_k, _v} ->
+        :ok
+
+      other ->
+        raise ArgumentError, "map entries must be {key, value} tuples, got: #{inspect(other)}"
     end)
 
     %__MODULE__{entries: entries}

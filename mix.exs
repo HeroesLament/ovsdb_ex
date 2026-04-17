@@ -84,7 +84,7 @@ defmodule OVSDB.MixProject do
       extras: [
         "README.md",
         "CHANGELOG.md": [title: "Changelog"],
-        "LICENSE": [title: "License"]
+        LICENSE: [title: "License"]
       ],
       source_ref: "v#{@version}",
       groups_for_modules: [
@@ -96,7 +96,7 @@ defmodule OVSDB.MixProject do
           OVSDB.Row,
           OVSDB.Value
         ],
-        "Protocol": [
+        Protocol: [
           OVSDB.Protocol
         ]
       ]

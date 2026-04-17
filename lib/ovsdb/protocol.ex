@@ -221,7 +221,10 @@ defmodule OVSDB.Protocol do
 
       {true, _, _, _, _} ->
         missing =
-          [{"params", Elixir.Map.has_key?(message, "params")}, {"id", Elixir.Map.has_key?(message, "id")}]
+          [
+            {"params", Elixir.Map.has_key?(message, "params")},
+            {"id", Elixir.Map.has_key?(message, "id")}
+          ]
           |> Enum.reject(fn {_, present} -> present end)
           |> Enum.map(fn {name, _} -> name end)
 

@@ -55,8 +55,9 @@ defmodule OVSDB.UUIDTest do
     test "sets version bits to 4 and variant bits to 10xx" do
       for _ <- 1..100 do
         uuid = UUID.generate()
-        <<_::binary-size(14), version::binary-size(1), _::binary-size(4),
-          variant::binary-size(1), _::binary>> = uuid.value
+
+        <<_::binary-size(14), version::binary-size(1), _::binary-size(4), variant::binary-size(1),
+          _::binary>> = uuid.value
 
         assert version == "4", "expected version 4, got #{version} in #{uuid.value}"
 
