@@ -35,3 +35,4 @@ ovsdb_ex-*.tar
 .vscode/
 *.swp
 *~
+trace.txt

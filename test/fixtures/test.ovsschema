@@ -1,0 +1,73 @@
+{
+  "name": "Test",
+  "version": "1.0.0",
+  "cksum": "123456789 1234",
+  "tables": {
+    "Bridge": {
+      "columns": {
+        "name": {"type": "string"},
+        "datapath_id": {
+          "type": {"key": "string", "min": 0, "max": 1}
+        },
+        "ports": {
+          "type": {
+            "key": {"type": "uuid", "refTable": "Port", "refType": "strong"},
+            "min": 0,
+            "max": "unlimited"
+          }
+        },
+        "external_ids": {
+          "type": {
+            "key": "string",
+            "value": "string",
+            "min": 0,
+            "max": "unlimited"
+          }
+        },
+        "fail_mode": {
+          "type": {
+            "key": {
+              "type": "string",
+              "enum": ["set", ["standalone", "secure"]]
+            },
+            "min": 0,
+            "max": 1
+          }
+        },
+        "priority": {
+          "type": {
+            "key": {
+              "type": "integer",
+              "minInteger": 0,
+              "maxInteger": 65535
+            }
+          }
+        }
+      }
+    },
+    "Port": {
+      "columns": {
+        "name": {
+          "type": {
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        },
+        "vlan_tag": {
+          "type": {
+            "key": {
+              "type": "integer",
+              "minInteger": 0,
+              "maxInteger": 4095
+            },
+            "min": 0,
+            "max": 1
+          }
+        }
+      }
+    }
+  }
+}

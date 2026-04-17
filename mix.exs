@@ -1,7 +1,7 @@
 defmodule OVSDB.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/HeroesLament/ovsdb_ex"
 
   def project do
@@ -9,6 +9,7 @@ defmodule OVSDB.MixProject do
       app: :ovsdb_ex,
       version: @version,
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
 
@@ -22,9 +23,14 @@ defmodule OVSDB.MixProject do
       homepage_url: @source_url,
       docs: docs(),
 
+      # Quiet xref for :ssl — TLS is an optional transport and always
+      # available as part of OTP, so cross-reference checks on its
+      # functions aren't useful.
+      xref: [exclude: [:ssl]],
+
       # Dialyzer
       dialyzer: [
-        plt_add_apps: [:mix, :ex_unit],
+        plt_add_apps: [:mix, :ex_unit, :ssl, :crypto],
         flags: [:error_handling, :underspecs, :unmatched_returns]
       ]
     ]
@@ -32,9 +38,14 @@ defmodule OVSDB.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :ssl, :crypto]
     ]
   end
+
+  # Compile test/support modules only when running tests. Keeps the
+  # hex package slim and avoids bundling test-only handlers.
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
@@ -51,9 +62,9 @@ defmodule OVSDB.MixProject do
   defp description do
     """
     A pure-Elixir implementation of the Open vSwitch Database Management
-    Protocol (OVSDB), per RFC 7047. Provides a client (IDL-style in-memory
-    replica) and a server (accept connections and handle RPCs) for any
-    application that needs to speak OVSDB.
+    Protocol (OVSDB), per RFC 7047. Provides protocol primitives, operation
+    and transaction builders, schema parsing, client/server session
+    handling over TCP/TLS, and an in-memory IDL replica.
     """
   end
 
@@ -98,6 +109,29 @@ defmodule OVSDB.MixProject do
         ],
         Protocol: [
           OVSDB.Protocol
+        ],
+        "Operations & Transactions": [
+          OVSDB.Condition,
+          OVSDB.Operation,
+          OVSDB.Transaction,
+          OVSDB.MonitorSpec
+        ],
+        Schema: [
+          OVSDB.Schema,
+          OVSDB.Schema.Column,
+          OVSDB.Schema.Table,
+          OVSDB.SchemaHelper
+        ],
+        "Sessions & Transport": [
+          OVSDB.Framer,
+          OVSDB.Transport,
+          OVSDB.ClientSession,
+          OVSDB.ServerSession,
+          OVSDB.ServerSession.Handler,
+          OVSDB.Server
+        ],
+        IDL: [
+          OVSDB.Idl
         ]
       ]
     ]

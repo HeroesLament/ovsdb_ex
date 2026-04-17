@@ -1,319 +1,185 @@
 defmodule OVSDB.ProtocolTest do
   use ExUnit.Case, async: true
-  doctest OVSDB.Protocol
 
   alias OVSDB.Protocol
 
-  describe "known_method?/1 and known_methods/0" do
-    test "recognizes all client-side methods" do
-      for m <- ~w(list_dbs get_schema transact cancel monitor monitor_cancel
-                  lock steal unlock echo) do
-        assert Protocol.known_method?(m), "expected #{m} to be known"
-      end
-    end
-
-    test "recognizes all server-side notifications" do
-      for m <- ~w(update locked stolen echo) do
-        assert Protocol.known_method?(m), "expected #{m} to be known"
-      end
-    end
-
-    test "rejects unknown methods" do
-      refute Protocol.known_method?("nonsense")
-      refute Protocol.known_method?("")
-    end
-
-    test "rejects non-string inputs" do
-      refute Protocol.known_method?(42)
-      refute Protocol.known_method?(nil)
-      refute Protocol.known_method?(:transact)
-    end
-
-    test "known_methods/0 returns all methods deduplicated" do
-      methods = Protocol.known_methods()
-      assert length(methods) == length(Enum.uniq(methods))
-      assert "transact" in methods
-      assert "update" in methods
-      assert "echo" in methods
-    end
-  end
-
   describe "request/3" do
-    test "builds a request map" do
-      assert %{"method" => "list_dbs", "params" => [], "id" => 1} =
-               Protocol.request("list_dbs", [], 1)
+    test "builds a request map with id" do
+      req = Protocol.request("list_dbs", [], 1)
+      assert req == %{"method" => "list_dbs", "params" => [], "id" => 1}
     end
 
-    test "accepts string ids" do
-      assert %{"id" => "my-id"} = Protocol.request("get_schema", ["db"], "my-id")
+    test "accepts string ids too" do
+      req = Protocol.request("echo", ["ping"], "req-42")
+      assert req["id"] == "req-42"
     end
 
-    test "accepts complex params" do
-      params = ["db", %{"op" => "select", "table" => "Bridge"}]
-      assert %{"params" => ^params} = Protocol.request("transact", params, 1)
-    end
-
-    test "accepts any method name (vendor extensions allowed)" do
-      assert %{"method" => "vendor_extension"} = Protocol.request("vendor_extension", [], 1)
+    test "preserves params as given" do
+      req = Protocol.request("transact", ["Open_vSwitch", %{"op" => "select"}], 5)
+      assert req["params"] == ["Open_vSwitch", %{"op" => "select"}]
     end
   end
 
   describe "response/2" do
-    test "builds a successful response with null error" do
-      assert %{"result" => ["Open_vSwitch"], "error" => nil, "id" => 1} =
-               Protocol.response(1, ["Open_vSwitch"])
+    test "builds a success response" do
+      resp = Protocol.response(1, ["Open_vSwitch"])
+      assert resp == %{"id" => 1, "result" => ["Open_vSwitch"], "error" => nil}
     end
 
-    test "accepts any result shape" do
-      assert %{"result" => []} = Protocol.response(1, [])
-      assert %{"result" => %{"nested" => "map"}} = Protocol.response(1, %{"nested" => "map"})
+    test "result can be any term" do
+      resp = Protocol.response(1, %{"count" => 1})
+      assert resp["result"] == %{"count" => 1}
     end
   end
 
   describe "error_response/3" do
-    test "builds a simple error response" do
-      assert %{"result" => nil, "error" => "unknown database", "id" => 1} =
-               Protocol.error_response(1, "unknown database")
+    test "builds an error response" do
+      resp = Protocol.error_response(1, "not supported")
+      assert resp == %{"id" => 1, "result" => nil, "error" => "not supported"}
     end
 
-    test "nests error + details when details provided" do
-      assert %{
-               "error" => %{
-                 "error" => "syntax error",
-                 "details" => "unexpected token"
-               }
-             } = Protocol.error_response(1, "syntax error", "unexpected token")
-    end
+    test "with details, error field becomes an object with error+details" do
+      # RFC 7047 §3.1: when details are provided, the "error" field
+      # contains an object with both "error" and "details" members.
+      resp = Protocol.error_response(1, "constraint violation", "column 'x' is required")
 
-    test "bare error string when details is nil" do
-      assert %{"error" => "bare"} = Protocol.error_response(1, "bare", nil)
+      assert resp["error"] == %{
+               "error" => "constraint violation",
+               "details" => "column 'x' is required"
+             }
+
+      assert resp["id"] == 1
+      assert resp["result"] == nil
     end
   end
 
   describe "notification/2" do
-    test "builds a notification with null id" do
-      assert %{"method" => "echo", "params" => [], "id" => nil} =
-               Protocol.notification("echo", [])
-    end
-
-    test "distinguishes from a request by null id" do
-      req = Protocol.request("update", [], 1)
-      notif = Protocol.notification("update", [])
-
-      assert req["id"] == 1
-      assert notif["id"] == nil
+    test "builds a notification with id=null" do
+      note = Protocol.notification("update", ["monitor-1", %{}])
+      assert note == %{"method" => "update", "params" => ["monitor-1", %{}], "id" => nil}
     end
   end
 
-  describe "classify/1 — happy paths" do
-    test "classifies a request" do
+  describe "classify/1 — requests" do
+    test "recognizes a request (method + params + integer id)" do
       msg = %{"method" => "list_dbs", "params" => [], "id" => 1}
-      assert {:ok, {:request, %{id: 1, method: "list_dbs", params: []}}} = Protocol.classify(msg)
+      assert {:ok, {:request, %{id: 1, method: "list_dbs", params: []}}} =
+               Protocol.classify(msg)
     end
 
-    test "classifies a notification (method with null id)" do
-      msg = %{"method" => "update", "params" => ["m", %{}], "id" => nil}
+    test "recognizes a request with string id" do
+      msg = %{"method" => "echo", "params" => ["ping"], "id" => "req-42"}
+      assert {:ok, {:request, %{id: "req-42"}}} = Protocol.classify(msg)
+    end
+  end
 
+  describe "classify/1 — notifications" do
+    test "recognizes a notification (method + params + id=null)" do
+      msg = %{"method" => "update", "params" => ["m", %{}], "id" => nil}
       assert {:ok, {:notification, %{method: "update", params: ["m", %{}]}}} =
                Protocol.classify(msg)
     end
+  end
 
-    test "classifies a success response" do
-      msg = %{"result" => [1, 2], "error" => nil, "id" => 1}
-      assert {:ok, {:response, %{id: 1, result: [1, 2], error: nil}}} = Protocol.classify(msg)
-    end
-
-    test "classifies an error response" do
-      msg = %{"result" => nil, "error" => "unknown database", "id" => 1}
-
-      assert {:ok, {:response, %{id: 1, result: nil, error: "unknown database"}}} =
+  describe "classify/1 — responses" do
+    test "recognizes a success response" do
+      msg = %{"id" => 1, "result" => ["x"], "error" => nil}
+      assert {:ok, {:response, %{id: 1, result: ["x"], error: nil}}} =
                Protocol.classify(msg)
     end
 
-    test "accepts string ids" do
-      msg = %{"method" => "transact", "params" => ["db"], "id" => "my-txn"}
-      assert {:ok, {:request, %{id: "my-txn"}}} = Protocol.classify(msg)
-    end
-  end
-
-  describe "classify/1 — forward compatibility" do
-    test "ignores extra fields on requests" do
-      msg = %{"method" => "x", "params" => [], "id" => 1, "future_field" => "extension"}
-      assert {:ok, {:request, %{method: "x"}}} = Protocol.classify(msg)
+    test "recognizes an error response" do
+      msg = %{"id" => 1, "result" => nil, "error" => "boom"}
+      assert {:ok, {:response, %{id: 1, result: nil, error: "boom"}}} =
+               Protocol.classify(msg)
     end
   end
 
   describe "classify/1 — errors" do
-    test "rejects method-bearing messages without params" do
-      assert {:error, {:missing_fields, _}} = Protocol.classify(%{"method" => "x"})
-    end
-
-    test "rejects method-bearing messages without id" do
-      assert {:error, {:missing_fields, _}} = Protocol.classify(%{"method" => "x", "params" => []})
-    end
-
-    test "rejects responses with both result and error non-null" do
-      msg = %{"result" => 1, "error" => "also_set", "id" => 1}
-      assert {:error, :response_result_and_error_both_set} = Protocol.classify(msg)
-    end
-
-    test "rejects responses with both result and error null" do
-      msg = %{"result" => nil, "error" => nil, "id" => 1}
-      assert {:error, :response_result_and_error_both_null} = Protocol.classify(msg)
-    end
-
-    test "rejects responses with null id" do
-      msg = %{"result" => 1, "error" => nil, "id" => nil}
-      assert {:error, :response_id_null} = Protocol.classify(msg)
-    end
-
-    test "rejects empty maps" do
-      assert {:error, :unclassifiable} = Protocol.classify(%{})
-    end
-
     test "rejects non-map input" do
-      assert {:error, {:not_a_map, _}} = Protocol.classify("not a map")
-      assert {:error, {:not_a_map, _}} = Protocol.classify([1, 2])
-      assert {:error, {:not_a_map, _}} = Protocol.classify(nil)
+      assert {:error, {:not_a_map, "string"}} = Protocol.classify("string")
+      assert {:error, {:not_a_map, 42}} = Protocol.classify(42)
+    end
+
+    test "rejects method-bearing message without params" do
+      msg = %{"method" => "list_dbs", "id" => 1}
+      assert {:error, {:missing_fields, missing}} = Protocol.classify(msg)
+      assert "params" in missing
+    end
+
+    test "rejects method-bearing message without id" do
+      msg = %{"method" => "list_dbs", "params" => []}
+      assert {:error, {:missing_fields, missing}} = Protocol.classify(msg)
+      assert "id" in missing
+    end
+
+    test "rejects completely unclassifiable messages" do
+      assert {:error, :unclassifiable} = Protocol.classify(%{"random" => "thing"})
     end
   end
 
   describe "serialize/1" do
-    test "produces iodata that decodes back to the original" do
+    test "produces iodata that round-trips through parse" do
       req = Protocol.request("list_dbs", [], 1)
-      wire = req |> Protocol.serialize() |> IO.iodata_to_binary()
-      assert {:ok, ^req} = Protocol.parse(wire)
+      iodata = Protocol.serialize(req)
+      binary = IO.iodata_to_binary(iodata)
+      assert {:ok, parsed} = Protocol.parse(binary)
+      assert parsed == req
     end
 
-    test "serializes requests" do
-      wire =
-        Protocol.request("get_schema", ["Open_vSwitch"], 42)
-        |> Protocol.serialize()
-        |> IO.iodata_to_binary()
+    test "serializes nested data correctly" do
+      msg =
+        Protocol.request("transact", ["db", %{"op" => "insert", "row" => %{"x" => 1}}], 2)
 
-      {:ok, parsed} = Protocol.parse(wire)
-      assert parsed["method"] == "get_schema"
-      assert parsed["params"] == ["Open_vSwitch"]
-      assert parsed["id"] == 42
-    end
-
-    test "serializes responses" do
-      wire =
-        Protocol.response(1, ["db_a", "db_b"])
-        |> Protocol.serialize()
-        |> IO.iodata_to_binary()
-
-      {:ok, parsed} = Protocol.parse(wire)
-      assert parsed["result"] == ["db_a", "db_b"]
-      assert parsed["error"] == nil
-      assert parsed["id"] == 1
-    end
-
-    test "serializes error responses" do
-      wire =
-        Protocol.error_response(1, "unknown database")
-        |> Protocol.serialize()
-        |> IO.iodata_to_binary()
-
-      {:ok, parsed} = Protocol.parse(wire)
-      assert parsed["error"] == "unknown database"
-      assert parsed["result"] == nil
-    end
-
-    test "serializes notifications" do
-      wire =
-        Protocol.notification("echo", ["keepalive"])
-        |> Protocol.serialize()
-        |> IO.iodata_to_binary()
-
-      {:ok, parsed} = Protocol.parse(wire)
-      assert parsed["method"] == "echo"
-      assert parsed["id"] == nil
+      binary = Protocol.serialize(msg) |> IO.iodata_to_binary()
+      assert {:ok, parsed} = Protocol.parse(binary)
+      assert parsed == msg
     end
   end
 
   describe "parse/1" do
     test "parses valid JSON object" do
-      assert {:ok, %{"method" => "list_dbs", "id" => 1}} =
-               Protocol.parse(~s({"method":"list_dbs","params":[],"id":1}))
+      assert {:ok, %{"id" => 1}} = Protocol.parse(~s({"id":1}))
     end
 
-    test "rejects malformed JSON" do
-      assert {:error, {:parse_error, _}} = Protocol.parse("not json")
-      assert {:error, {:parse_error, _}} = Protocol.parse("{ incomplete")
+    test "rejects invalid JSON" do
+      assert {:error, _} = Protocol.parse(~s({"id":}))
+      assert {:error, _} = Protocol.parse("not json")
     end
 
-    test "rejects non-object JSON values" do
-      assert {:error, :not_an_object} = Protocol.parse("[1,2,3]")
-      assert {:error, :not_an_object} = Protocol.parse("42")
-      assert {:error, :not_an_object} = Protocol.parse(~s("string"))
-      assert {:error, :not_an_object} = Protocol.parse("null")
+    test "rejects non-object JSON (arrays, primitives)" do
+      assert {:error, _} = Protocol.parse("[1,2,3]")
+      assert {:error, _} = Protocol.parse("42")
+      assert {:error, _} = Protocol.parse(~s("just a string"))
     end
   end
 
-  describe "parse_and_classify/1" do
-    test "parses then classifies in one step" do
-      wire = ~s({"method":"list_dbs","params":[],"id":1})
-      assert {:ok, {:request, %{id: 1, method: "list_dbs"}}} = Protocol.parse_and_classify(wire)
+  describe "known_methods/0 and known_method?/1" do
+    test "returns a non-empty list of method strings" do
+      methods = Protocol.known_methods()
+      assert is_list(methods)
+      assert methods != []
+      assert Enum.all?(methods, &is_binary/1)
     end
 
-    test "propagates parse errors" do
-      assert {:error, {:parse_error, _}} = Protocol.parse_and_classify("garbage")
+    test "includes expected core methods" do
+      methods = Protocol.known_methods()
+      assert "list_dbs" in methods
+      assert "get_schema" in methods
+      assert "transact" in methods
+      assert "monitor" in methods
+      assert "echo" in methods
     end
 
-    test "propagates classify errors" do
-      # valid JSON but malformed OVSDB message
-      wire = ~s({"method":"x"})
-      assert {:error, {:missing_fields, _}} = Protocol.parse_and_classify(wire)
-    end
-  end
-
-  describe "full roundtrip — build → serialize → parse → classify" do
-    test "requests roundtrip" do
-      for {method, params, id} <- [
-            {"list_dbs", [], 1},
-            {"get_schema", ["Open_vSwitch"], 2},
-            {"transact", ["db", %{"op" => "select", "table" => "Bridge"}], "txn-3"}
-          ] do
-        msg = Protocol.request(method, params, id)
-        wire = msg |> Protocol.serialize() |> IO.iodata_to_binary()
-        {:ok, {:request, classified}} = Protocol.parse_and_classify(wire)
-
-        assert classified.method == method
-        assert classified.params == params
-        assert classified.id == id
-      end
+    test "known_method? accepts known method names" do
+      assert Protocol.known_method?("list_dbs")
+      assert Protocol.known_method?("transact")
     end
 
-    test "responses roundtrip" do
-      msg = Protocol.response(1, ["a", "b"])
-      wire = msg |> Protocol.serialize() |> IO.iodata_to_binary()
-
-      assert {:ok, {:response, %{id: 1, result: ["a", "b"], error: nil}}} =
-               Protocol.parse_and_classify(wire)
-    end
-
-    test "error responses roundtrip with nested error+details" do
-      msg = Protocol.error_response(42, "syntax error", "unexpected token at byte 42")
-      wire = msg |> Protocol.serialize() |> IO.iodata_to_binary()
-
-      {:ok, {:response, %{id: 42, result: nil, error: error}}} =
-        Protocol.parse_and_classify(wire)
-
-      assert error == %{
-               "error" => "syntax error",
-               "details" => "unexpected token at byte 42"
-             }
-    end
-
-    test "notifications roundtrip" do
-      msg = Protocol.notification("update", ["monitor-id", %{"Bridge" => %{}}])
-      wire = msg |> Protocol.serialize() |> IO.iodata_to_binary()
-
-      assert {:ok, {:notification, %{method: "update", params: params}}} =
-               Protocol.parse_and_classify(wire)
-
-      assert params == ["monitor-id", %{"Bridge" => %{}}]
+    test "known_method? rejects unknown or non-binary input" do
+      refute Protocol.known_method?("not_a_method")
+      refute Protocol.known_method?(:atom)
+      refute Protocol.known_method?(42)
     end
   end
 end

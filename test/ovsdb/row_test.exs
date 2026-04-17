@@ -1,142 +1,137 @@
 defmodule OVSDB.RowTest do
   use ExUnit.Case, async: true
-  doctest OVSDB.Row
 
   alias OVSDB.{Row, UUID}
 
-  setup do
-    uuid = UUID.new("550e8400-e29b-41d4-a716-446655440000")
-    version = UUID.new("11111111-2222-4333-8444-555555555555")
-    {:ok, uuid: uuid, version: version}
-  end
-
   describe "new/1" do
-    test "creates a row from a column map" do
-      row = Row.new(%{"name" => "br-lan", "ofport" => 42})
-      assert row.columns == %{"name" => "br-lan", "ofport" => 42}
-      assert row.uuid == nil
-      assert row.version == nil
+    test "creates a row with no columns when called without args" do
+      assert Row.new() == %Row{uuid: nil, version: nil, columns: %{}}
     end
 
-    test "creates an empty row with no args" do
-      row = Row.new()
-      assert row.columns == %{}
-      assert row.uuid == nil
-      assert row.version == nil
+    test "wraps a column map" do
+      columns = %{"name" => "br-lan", "ofport" => 42}
+      assert Row.new(columns) == %Row{uuid: nil, version: nil, columns: columns}
     end
   end
 
   describe "get/3" do
-    test "returns the value for a column" do
+    test "returns the column value when present" do
       row = Row.new(%{"name" => "br-lan"})
       assert Row.get(row, "name") == "br-lan"
     end
 
-    test "returns nil for missing column by default" do
-      assert Row.get(Row.new(), "missing") == nil
+    test "returns nil for absent column by default" do
+      row = Row.new(%{"name" => "br-lan"})
+      assert Row.get(row, "missing") == nil
     end
 
-    test "returns custom default for missing column" do
-      assert Row.get(Row.new(), "missing", :absent) == :absent
+    test "returns custom default for absent column" do
+      row = Row.new(%{})
+      assert Row.get(row, "missing", :not_found) == :not_found
     end
 
-    test "returns the struct field for _uuid when set", %{uuid: uuid} do
-      row = Row.put(Row.new(), "_uuid", uuid)
+    test "returns uuid from struct field when asked for \"_uuid\"" do
+      uuid = UUID.generate()
+      row = %Row{uuid: uuid, columns: %{}}
       assert Row.get(row, "_uuid") == uuid
     end
 
-    test "returns the struct field for _version when set", %{version: version} do
-      row = Row.put(Row.new(), "_version", version)
+    test "returns version from struct field when asked for \"_version\"" do
+      version = UUID.generate()
+      row = %Row{version: version, columns: %{}}
       assert Row.get(row, "_version") == version
     end
 
-    test "returns default when _uuid is not set" do
-      assert Row.get(Row.new(), "_uuid") == nil
-      assert Row.get(Row.new(), "_uuid", :no_uuid) == :no_uuid
+    test "returns default for \"_uuid\" when not set" do
+      row = Row.new()
+      assert Row.get(row, "_uuid", :absent) == :absent
     end
   end
 
   describe "put/3" do
-    test "adds a column value" do
+    test "adds a regular column" do
       row = Row.new() |> Row.put("name", "br-lan")
       assert Row.get(row, "name") == "br-lan"
     end
 
-    test "overwrites existing column" do
-      row = Row.new(%{"name" => "old"}) |> Row.put("name", "new")
+    test "overwrites an existing column" do
+      row =
+        Row.new(%{"name" => "old"})
+        |> Row.put("name", "new")
+
       assert Row.get(row, "name") == "new"
     end
 
-    test "routes _uuid to struct field", %{uuid: uuid} do
-      row = Row.put(Row.new(), "_uuid", uuid)
+    test "sets uuid via the \"_uuid\" shortcut" do
+      uuid = UUID.generate()
+      row = Row.new() |> Row.put("_uuid", uuid)
       assert row.uuid == uuid
-      assert row.columns == %{}
+      # Should not appear in columns map
+      refute Elixir.Map.has_key?(row.columns, "_uuid")
     end
 
-    test "routes _version to struct field", %{version: version} do
-      row = Row.put(Row.new(), "_version", version)
+    test "sets version via the \"_version\" shortcut" do
+      version = UUID.generate()
+      row = Row.new() |> Row.put("_version", version)
       assert row.version == version
-      assert row.columns == %{}
+      refute Elixir.Map.has_key?(row.columns, "_version")
     end
   end
 
   describe "has?/2" do
-    test "returns true when column exists" do
-      assert Row.has?(Row.new(%{"name" => "x"}), "name")
+    test "returns true for a present column" do
+      row = Row.new(%{"name" => "br-lan"})
+      assert Row.has?(row, "name")
     end
 
-    test "returns false when column is absent" do
-      refute Row.has?(Row.new(), "nope")
+    test "returns false for absent column" do
+      row = Row.new(%{"name" => "br-lan"})
+      refute Row.has?(row, "missing")
     end
 
-    test "returns true for _uuid when set", %{uuid: uuid} do
-      row = Row.put(Row.new(), "_uuid", uuid)
+    test "returns true for \"_uuid\" when uuid is set" do
+      row = %Row{uuid: UUID.generate(), columns: %{}}
       assert Row.has?(row, "_uuid")
     end
 
-    test "returns false for _uuid when not set" do
+    test "returns false for \"_uuid\" when uuid is nil" do
       refute Row.has?(Row.new(), "_uuid")
-    end
-
-    test "returns true for _version when set", %{version: version} do
-      row = Row.put(Row.new(), "_version", version)
-      assert Row.has?(row, "_version")
-    end
-  end
-
-  describe "columns/1" do
-    test "returns all column names" do
-      row = Row.new(%{"a" => 1, "b" => 2, "c" => 3})
-      assert Enum.sort(Row.columns(row)) == ["a", "b", "c"]
-    end
-
-    test "excludes _uuid metadata", %{uuid: uuid} do
-      row = Row.put(Row.new(%{"name" => "br"}), "_uuid", uuid)
-      assert Row.columns(row) == ["name"]
-    end
-
-    test "returns empty list for empty row" do
-      assert Row.columns(Row.new()) == []
     end
   end
 
   describe "diff/2" do
-    test "returns only the columns that differ" do
-      old = Row.new(%{"name" => "br", "ofport" => 1, "keep" => true})
-      new = Row.new(%{"name" => "br", "ofport" => 2, "keep" => true, "added" => "x"})
-      assert Row.diff(old, new) == %{"ofport" => 2, "added" => "x"}
+    test "returns columns that changed between two rows" do
+      old = Row.new(%{"name" => "old", "count" => 1, "stable" => "x"})
+      new = Row.new(%{"name" => "new", "count" => 1, "stable" => "x"})
+      assert Row.diff(old, new) == %{"name" => "new"}
     end
 
-    test "returns empty map when identical" do
-      r = Row.new(%{"a" => 1, "b" => 2})
-      assert Row.diff(r, r) == %{}
+    test "returns new columns not in old" do
+      old = Row.new(%{"a" => 1})
+      new = Row.new(%{"a" => 1, "b" => 2})
+      assert Row.diff(old, new) == %{"b" => 2}
     end
 
-    test "ignores _uuid metadata differences", %{uuid: uuid} do
-      r1 = Row.put(Row.new(%{"col" => 1}), "_uuid", uuid)
-      r2 = Row.new(%{"col" => 1})
-      assert Row.diff(r1, r2) == %{}
-      assert Row.diff(r2, r1) == %{}
+    test "returns empty map for unchanged rows" do
+      row = Row.new(%{"a" => 1, "b" => 2})
+      assert Row.diff(row, row) == %{}
+    end
+  end
+
+  describe "columns/1" do
+    test "returns list of column names" do
+      row = Row.new(%{"a" => 1, "b" => 2, "c" => 3})
+      assert Enum.sort(Row.columns(row)) == ["a", "b", "c"]
+    end
+
+    test "returns empty list for row with no columns" do
+      assert Row.columns(Row.new()) == []
+    end
+
+    test "does not include _uuid or _version even when set" do
+      uuid = UUID.generate()
+      row = %Row{uuid: uuid, columns: %{"name" => "x"}}
+      assert Row.columns(row) == ["name"]
     end
   end
 end

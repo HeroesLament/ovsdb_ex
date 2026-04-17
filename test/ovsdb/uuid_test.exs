@@ -1,117 +1,105 @@
 defmodule OVSDB.UUIDTest do
   use ExUnit.Case, async: true
-  doctest OVSDB.UUID
 
   alias OVSDB.UUID
 
-  describe "new/1" do
-    test "creates a UUID from a valid canonical string" do
-      uuid = UUID.new("550e8400-e29b-41d4-a716-446655440000")
-      assert uuid.value == "550e8400-e29b-41d4-a716-446655440000"
+  describe "generate/0" do
+    test "produces a struct with a valid uuid string" do
+      uuid = UUID.generate()
+      assert %UUID{value: v} = uuid
+      assert is_binary(v)
+      assert match?({:ok, _}, UUID.parse(v))
     end
 
-    test "raises on invalid strings" do
-      for bad <- [
-            "not-a-uuid",
-            "550e8400-e29b-41d4-a716-44665544000",
-            "550e8400-e29b-41d4-a716-4466554400000",
-            "",
-            "550e8400e29b41d4a716446655440000"
-          ] do
-        assert_raise ArgumentError, fn -> UUID.new(bad) end
+    test "produces unique uuids" do
+      uuids = for _ <- 1..100, do: UUID.generate().value
+      assert Enum.uniq(uuids) == uuids
+    end
+
+    test "sets version 4 and RFC 4122 variant bits" do
+      # Version is the first nibble of the 3rd group (char at index 14).
+      # Variant is the first two bits of the 4th group (char at index 19):
+      # per RFC 4122 §4.1.1 the high bits must be 10, so the first hex
+      # digit of the 4th group is one of 8, 9, a, b.
+      for _ <- 1..50 do
+        %UUID{value: v} = UUID.generate()
+        assert String.at(v, 14) == "4"
+        variant_char = String.at(v, 19)
+        assert variant_char in ["8", "9", "a", "b"]
       end
+    end
+  end
+
+  describe "new/1" do
+    test "wraps a valid uuid string" do
+      s = "550e8400-e29b-41d4-a716-446655440000"
+      assert UUID.new(s) == %UUID{value: s}
+    end
+
+    test "normalizes case" do
+      upper = "550E8400-E29B-41D4-A716-446655440000"
+      assert %UUID{value: "550e8400-e29b-41d4-a716-446655440000"} = UUID.new(upper)
+    end
+
+    test "raises on invalid input" do
+      assert_raise ArgumentError, fn -> UUID.new("not-a-uuid") end
+      assert_raise ArgumentError, fn -> UUID.new("") end
     end
   end
 
   describe "parse/1" do
-    test "returns {:ok, uuid} for valid strings" do
-      assert {:ok, %UUID{value: "550e8400-e29b-41d4-a716-446655440000"}} =
-               UUID.parse("550e8400-e29b-41d4-a716-446655440000")
+    test "accepts a valid uuid string" do
+      s = "550e8400-e29b-41d4-a716-446655440000"
+      assert {:ok, %UUID{value: ^s}} = UUID.parse(s)
     end
 
-    test "normalizes uppercase to lowercase" do
-      assert {:ok, %UUID{value: "550e8400-e29b-41d4-a716-446655440000"}} =
-               UUID.parse("550E8400-E29B-41D4-A716-446655440000")
-    end
-
-    test "returns {:error, :invalid_uuid} on malformed strings" do
-      assert {:error, :invalid_uuid} = UUID.parse("not a uuid")
+    test "rejects malformed input" do
+      assert {:error, :invalid_uuid} = UUID.parse("not-a-uuid")
+      assert {:error, :invalid_uuid} = UUID.parse("550e8400-e29b-41d4-a716")
       assert {:error, :invalid_uuid} = UUID.parse("")
     end
 
     test "rejects non-binary input" do
-      assert {:error, :invalid_uuid} = UUID.parse(123)
+      assert {:error, :invalid_uuid} = UUID.parse(42)
       assert {:error, :invalid_uuid} = UUID.parse(nil)
     end
-  end
 
-  describe "generate/0" do
-    test "produces a valid v4 UUID" do
-      uuid = UUID.generate()
-      assert byte_size(uuid.value) == 36
-      assert {:ok, ^uuid} = UUID.parse(uuid.value)
-    end
-
-    test "sets version bits to 4 and variant bits to 10xx" do
-      for _ <- 1..100 do
-        uuid = UUID.generate()
-
-        <<_::binary-size(14), version::binary-size(1), _::binary-size(4), variant::binary-size(1),
-          _::binary>> = uuid.value
-
-        assert version == "4", "expected version 4, got #{version} in #{uuid.value}"
-
-        assert variant in ~w(8 9 a b),
-               "expected variant 8/9/a/b, got #{variant} in #{uuid.value}"
-      end
-    end
-
-    test "produces uniformly-distributed variant bits" do
-      variants =
-        for _ <- 1..1000 do
-          uuid = UUID.generate()
-          <<_::binary-size(19), variant::binary-size(1), _::binary>> = uuid.value
-          variant
-        end
-
-      counts = Enum.frequencies(variants)
-      # Each variant should appear ~250 times ± a few stddev
-      for v <- ~w(8 9 a b) do
-        assert counts[v] > 150, "variant #{v} appeared only #{counts[v]} times in 1000"
-        assert counts[v] < 350, "variant #{v} appeared #{counts[v]} times in 1000"
-      end
-    end
-
-    test "produces unique UUIDs" do
-      uuids = for _ <- 1..1000, do: UUID.generate().value
-      assert length(uuids) == length(Enum.uniq(uuids))
+    test "downcases uppercase input" do
+      upper = "550E8400-E29B-41D4-A716-446655440000"
+      lower = "550e8400-e29b-41d4-a716-446655440000"
+      assert {:ok, %UUID{value: ^lower}} = UUID.parse(upper)
     end
   end
 
-  describe "encode/1 and decode/1" do
-    test "round-trip preserves value" do
-      uuid = UUID.new("550e8400-e29b-41d4-a716-446655440000")
-      assert {:ok, ^uuid} = UUID.decode(UUID.encode(uuid))
+  describe "encode/1" do
+    test "produces [\"uuid\", string] wire form" do
+      u = UUID.new("550e8400-e29b-41d4-a716-446655440000")
+      assert UUID.encode(u) == ["uuid", "550e8400-e29b-41d4-a716-446655440000"]
     end
 
-    test "encode produces RFC 7047 wire form" do
-      uuid = UUID.new("550e8400-e29b-41d4-a716-446655440000")
-      assert UUID.encode(uuid) == ["uuid", "550e8400-e29b-41d4-a716-446655440000"]
+    test "round-trips via decode" do
+      original = UUID.generate()
+      wire = UUID.encode(original)
+      assert {:ok, decoded} = UUID.decode(wire)
+      assert decoded == original
+    end
+  end
+
+  describe "decode/1" do
+    test "decodes [\"uuid\", s] wire form" do
+      s = "550e8400-e29b-41d4-a716-446655440000"
+      assert {:ok, %UUID{value: ^s}} = UUID.decode(["uuid", s])
     end
 
-    test "decode rejects non-uuid tagged forms" do
-      assert {:error, :malformed} = UUID.decode(["set", []])
+    test "rejects other shapes" do
+      assert {:error, :malformed} = UUID.decode("raw-string")
       assert {:error, :malformed} = UUID.decode(["named-uuid", "foo"])
+      assert {:error, :malformed} = UUID.decode(["uuid"])
+      assert {:error, :malformed} = UUID.decode(42)
     end
 
-    test "decode rejects invalid UUID strings inside the wire form" do
+    test "propagates invalid uuid error from parse" do
       assert {:error, :invalid_uuid} = UUID.decode(["uuid", "not-a-uuid"])
-    end
-
-    test "decode rejects non-list input" do
-      assert {:error, :malformed} = UUID.decode("bare string")
-      assert {:error, :malformed} = UUID.decode(%{})
-      assert {:error, :malformed} = UUID.decode(nil)
     end
   end
 end

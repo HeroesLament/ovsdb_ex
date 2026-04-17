@@ -24,15 +24,15 @@ OVSDB-compatible database.
   `echo`, and the server-side notifications.
 - **IDL replica pattern.** Like `ovs.db.idl` in the official Python
   bindings, but native OTP — replica lookups are lock-free ETS reads.
-- **Pluggable transport.** TCP, TLS, and Unix domain sockets.
+- **Pluggable transport.** TCP or TLS.
 
 ## Status
 
-> ⚠️ **Early development.** Layer 1 (data model) and Layer 2 (protocol
-> envelopes) are implemented and tested. Layers 3 (request builders),
-> 4 (connection processes), and the IDL replica are in active
-> development. Version `0.1.x` is a preview release; the API will
-> evolve before `1.0`.
+Active development. The 0.2 line is feature-complete for client and
+server use; APIs are stable but may evolve before 1.0. All quality
+gates (format, credo strict, compile warnings-as-errors, dialyzer) pass
+cleanly. Live-validated end-to-end in iex. An ExUnit test suite is
+planned for a subsequent release.
 
 ## Installation
 
@@ -41,35 +41,101 @@ Add `ovsdb_ex` to your `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ovsdb_ex, "~> 0.1"}
+    {:ovsdb_ex, "~> 0.2"}
   ]
 end
 ```
 
 ## Quick start
 
-### Building an OVSDB request by hand
+### Client: talk to an existing OVSDB server
 
 ```elixir
-alias OVSDB.{Protocol, UUID, Set, Value}
+alias OVSDB.{ClientSession, Transaction, Operation, Condition, UUID}
 
-# Build a list_dbs request
-request = Protocol.request("list_dbs", [], 1)
-#=> %{"method" => "list_dbs", "params" => [], "id" => 1}
+{:ok, session} = ClientSession.connect("ovsdb.local", 6640)
 
-# Serialize to wire bytes
-wire = Protocol.serialize(request) |> IO.iodata_to_binary()
-#=> "{\"id\":1,\"method\":\"list_dbs\",\"params\":[]}"
+# List databases
+{:ok, dbs} = ClientSession.list_dbs(session)
 
-# Parse a response from the server
-{:ok, msg} = Protocol.parse(response_bytes)
-{:ok, {:response, %{result: dbs}}} = Protocol.classify(msg)
+# Fetch schema
+{:ok, schema_json} = ClientSession.get_schema(session, "Open_vSwitch")
+
+# Build and send a transaction
+txn =
+  Transaction.new("Open_vSwitch")
+  |> Transaction.add(
+    Operation.insert("Bridge", %{"name" => "br-int"})
+  )
+
+{:ok, [%{"uuid" => ["uuid", new_uuid]}]} =
+  ClientSession.transact(session, txn)
+```
+
+### IDL: maintain a live replica
+
+```elixir
+alias OVSDB.{ClientSession, Idl, Schema, SchemaHelper}
+
+{:ok, session} = ClientSession.connect("ovsdb.local", 6640)
+{:ok, schema_json} = ClientSession.get_schema(session, "Open_vSwitch")
+{:ok, schema} = Schema.parse(schema_json)
+
+# Register interest in specific tables/columns
+helper =
+  SchemaHelper.new(schema)
+  |> SchemaHelper.register_columns!("AWLAN_Node", ["manager_addr"])
+  |> SchemaHelper.register_table!("Wifi_VIF_State")
+
+# Start the IDL — subscribes and populates from current state
+{:ok, idl} = Idl.start_link(
+  session: session,
+  helper: helper,
+  monitor_id: "my-idl"
+)
+
+# Subscribe to change notifications
+Idl.subscribe(idl, "AWLAN_Node")
+
+# Read any time, with no roundtrip
+rows = Idl.get_table(idl, "AWLAN_Node")
+
+# Receive {:idl_changed, idl, table, :insert | :modify | :delete, uuid}
+# messages whenever the replica changes
+```
+
+### Server: serve your own OVSDB-compatible database
+
+```elixir
+defmodule MyHandler do
+  @behaviour OVSDB.ServerSession.Handler
+
+  def init(_opts), do: {:ok, %{rows: %{}}}
+
+  def handle_list_dbs(state), do: {:ok, ["My_DB"], state}
+
+  def handle_get_schema("My_DB", state), do: {:ok, my_schema(), state}
+
+  def handle_transact("My_DB", ops, state) do
+    {results, new_state} = apply_ops(ops, state)
+    {:ok, results, new_state}
+  end
+
+  defp my_schema, do: %{"name" => "My_DB", "tables" => %{...}}
+  defp apply_ops(_ops, state), do: {[], state}
+end
+
+# Start a server on port 6640
+{:ok, _srv} = OVSDB.Server.start_link(
+  port: 6640,
+  handler: MyHandler
+)
 ```
 
 ### Working with OVSDB values
 
 OVSDB's atomic types map to Elixir's native types. Only UUIDs need
-wrapping, and sets/maps get small structs for the compound types:
+wrapping; sets and maps get small structs for the compound types:
 
 ```elixir
 alias OVSDB.{UUID, Set, Map, Value}
@@ -87,7 +153,7 @@ uuid = UUID.generate()
 # Sets are unordered; 1-element sets optimize to bare value on the wire
 ports = Set.new([uuid1, uuid2])
 
-# Maps are ordered lists of {k, v} tuples (preserving wire structure)
+# Maps preserve ordered {k, v} entries (matching wire structure)
 tags = Map.new(%{"owner" => "opensync", "role" => "ap"})
 
 # Value.encode/1 walks any value, handling nested wrappers
@@ -95,85 +161,40 @@ Value.encode(ports)
 #=> ["set", [["uuid", "..."], ["uuid", "..."]]]
 ```
 
-### Planned API (coming in 0.2.x)
+## Architecture
 
-```elixir
-alias OVSDB.{Idl, SchemaHelper, Transaction, Operation, Condition}
+The library is layered:
 
-# Load a schema
-{:ok, schema} = OVSDB.Schema.load("priv/vswitch.ovsschema")
+| Layer | Modules | Role |
+|---|---|---|
+| 1. Data model | `UUID`, `NamedUUID`, `Set`, `Map`, `Row`, `Value` | Typed representations of RFC 7047 values |
+| 2. Protocol | `Protocol` | JSON-RPC 1.0 envelopes, wire serialization, classification |
+| 3. Operations | `Condition`, `Operation`, `Transaction`, `MonitorSpec`, `Schema`, `SchemaHelper` | High-level builders for RFC 7047 operations and schemas |
+| 4. Sessions | `Framer`, `Transport`, `ClientSession`, `ServerSession`, `Server`, `Idl` | Wire framing, socket ownership, request correlation, IDL replica |
 
-# Register interest in specific tables/columns
-helper =
-  SchemaHelper.new(schema)
-  |> SchemaHelper.register_columns("Bridge", ~w(name ports))
-  |> SchemaHelper.register_columns("Port",   ~w(name interfaces))
+Each layer uses only the layers below it. The lower layers are
+usable standalone — you can build wire messages by hand, frame your
+own byte streams, or construct operations without a session if you
+prefer.
 
-# Start an IDL — maintains an in-memory replica of the remote DB
-{:ok, idl} = Idl.start_link(
-  remote: {:tcp, "127.0.0.1", 6640},
-  schema_helper: helper
-)
+## Alternatives
 
-# Read from the replica (lock-free ETS lookup, microseconds)
-bridges = Idl.list_rows(idl, "Bridge")
-
-# Write via transaction
-txn =
-  Transaction.new("Open_vSwitch")
-  |> Transaction.add(Operation.insert("Bridge",
-       %{"name" => "br-lan"}, uuid_name: "new_br"))
-
-{:ok, _result} = Idl.transact(idl, txn)
-```
-
-## Design philosophy
-
-- **Pure functions where possible.** Layers 1-3 are pure Elixir term
-  manipulation with no processes. Processes enter the picture only at
-  Layer 4 (connection management).
-- **Plain maps, not structs, for protocol messages.** A JSON-RPC
-  envelope is already a map; introducing a struct wrapper adds
-  ceremony without benefit.
-- **Schema-parameterized, not schema-coupled.** The library works
-  with any OVSDB schema. No built-in schema definitions.
-- **Idiomatic OTP.** `Idl` and `Session` are GenServers. Connections
-  are supervised. Failures are expected and recovered, not prevented.
-
-## Comparison to related projects
-
-| Project                  | Language | Status       | Notes                    |
-|--------------------------|----------|--------------|--------------------------|
-| `ovs.db.idl`             | Python   | Active       | Part of Open vSwitch     |
-| `ryu.services.protocols.ovsdb` | Python | Active | Ryu SDN framework        |
-| `ovsdbapp`               | Python   | Active       | OpenStack's wrapper      |
-| `libovsdb` (Go)          | Go       | Active       | Used by ovn-kubernetes   |
-| `ovsdb` (Erlang)         | Erlang   | Unmaintained | Last update 2016         |
-| **`ovsdb_ex`**           | Elixir   | In progress  | This library             |
-
-`ovsdb_ex` is the first actively-maintained OVSDB library for the
-BEAM ecosystem.
+- **[python-ovs](https://github.com/openvswitch/ovs/tree/main/python/ovs)** —
+  the canonical OVSDB library from the OVS project. Reference
+  implementation for the IDL pattern. Only available in Python.
+- **[libovsdb](https://github.com/ovn-org/libovsdb)** — Go implementation
+  used by OVN and Kubernetes CNI plugins.
+- **Shelling out to `ovs-vsctl`** — works for configuration but gives
+  you no real-time updates, no transactional semantics across multiple
+  commands, and no server-side flexibility.
 
 ## Contributing
 
-Contributions welcome! Please:
-
-1. Open an issue first for any non-trivial change.
-2. Run `mix test`, `mix format --check-formatted`, `mix credo`, and
-   `mix dialyzer` before submitting.
-3. Add tests for new functionality (the sandbox scripts in this repo's
-   history are a good model for comprehensive coverage).
+Issues and pull requests welcome. The library is part of a broader
+effort to build SDN tooling (OpenSync controllers in particular) in
+Elixir — feedback from users of other OVSDB-based protocols is especially
+valuable.
 
 ## License
 
-Apache 2.0. See `LICENSE`.
-
-The Apache 2.0 license matches that of Open vSwitch itself, making it
-easy to use this library alongside the Open vSwitch project.
-
-## Acknowledgments
-
-This library's architecture draws heavily from the official Open
-vSwitch Python IDL (`ovs.db.idl`) — particularly its `SchemaHelper`,
-in-memory replica, and `change_seqno` notification patterns. RFC 7047
-was authored by Ben Pfaff and Bruce Davie at VMware in 2013.
+Apache License 2.0. See [LICENSE](LICENSE).
